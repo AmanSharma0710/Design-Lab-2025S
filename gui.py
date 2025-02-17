@@ -176,7 +176,10 @@ class Geometry:
 
 
 class PointDragger:
-    """GUI application to visualize point dragging, convex hulls, and minimum enclosing circles."""
+    """GUI application to visualize point dragging, convex hulls, and minimum enclosing circles.
+    
+    Also provides functionality to save the current output as SVG files.
+    """
     def __init__(self, root, width=600, height=800):
         self.root = root
         self.root.title("Point Dragger")
@@ -196,7 +199,6 @@ class PointDragger:
         self.random_label.pack(side=tk.LEFT, padx=5)
         self.random_entry = tk.Entry(self.file_frame, width=5)
         self.random_entry.pack(side=tk.LEFT)
-        # Renamed button text:
         self.random_button = tk.Button(self.file_frame, text="Generate Random Points", command=self.generate_random_points)
         self.random_button.pack(side=tk.LEFT, padx=5)
         
@@ -221,11 +223,12 @@ class PointDragger:
         self.canvas.pack()
         
         # --- Additional Function Buttons ---
-        # Renamed button text:
-        self.hull_button = tk.Button(root, text="Generate Convex Hulls", command=self.calculate_convex_hulls)
+        self.hull_button = tk.Button(root, text="Generate Convex Hulls", command=self.draw_convex_hulls)
         self.hull_button.pack(pady=5)
-        self.circle_button = tk.Button(root, text="Generate Enclosing Circles", command=self.generate_enclosing_circles)
+        self.circle_button = tk.Button(root, text="Generate Enclosing Circles", command=self.draw_enclosing_circles)
         self.circle_button.pack(pady=5)
+        self.save_button = tk.Button(root, text="Save SVG Files", command=self.save_svg)
+        self.save_button.pack(pady=5)
         
         # --- Data ---
         self.points = []     # List of (x, y) tuples
@@ -234,6 +237,162 @@ class PointDragger:
         self.drag_data = {"x": 0, "y": 0, "idx": None, "initial_point": (0, 0)}
         
         self.canvas.bind("<ButtonRelease-1>", self.end_drag)
+    
+    # --- Helper Functions for SVG Writing ---
+    def _write_svg_header(self, f):
+        f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+        f.write(f'<svg width="{self.canvas_width}" height="{self.canvas_height}" xmlns="http://www.w3.org/2000/svg">\n')
+    
+    def _write_svg_footer(self, f):
+        f.write('</svg>\n')
+    
+    def _write_points(self, f, points, point_color_map=None, default_color="black"):
+        """Write points as SVG circle elements.
+        
+        Args:
+            f: File object.
+            points: List of (x, y) tuples.
+            point_color_map: Optional dict mapping point -> color.
+            default_color: Default color for points.
+        """
+        for p in points:
+            color = point_color_map.get(p, default_color) if point_color_map else default_color
+            f.write(f'<circle cx="{p[0]}" cy="{p[1]}" r="3" fill="{color}" stroke="{color}" stroke-width="2"/>\n')
+    
+    def _write_hulls(self, f, hull_layers, hull_colors):
+        """Write convex hull layers as SVG polygon elements.
+        
+        Args:
+            f: File object.
+            hull_layers: List of hull layers (each a list of (x, y) tuples).
+            hull_colors: List of colors to use for hulls.
+        """
+        for i, hull in enumerate(hull_layers):
+            color = hull_colors[i % len(hull_colors)]
+            pts_str = " ".join(f"{p[0]},{p[1]}" for p in hull)
+            f.write(f'<polygon points="{pts_str}" stroke="{color}" fill="none" stroke-width="2"/>\n')
+    
+    def _write_circles(self, f, circles, circle_point_map, circle_colors):
+        """Write circles as SVG circle elements and their points in matching color.
+        
+        Args:
+            f: File object.
+            circles: List of (cx, cy, r) tuples.
+            circle_point_map: List of lists of points assigned to each circle.
+            circle_colors: List of colors for the circles.
+        """
+        for i, circle in enumerate(circles):
+            color = circle_colors[i % len(circle_colors)]
+            cx, cy, r = circle
+            f.write(f'<circle cx="{int(cx)}" cy="{int(cy)}" r="{int(r)}" stroke="{color}" fill="none" stroke-width="2"/>\n')
+            # Write the points belonging to this circle in the same color.
+            pts = circle_point_map[i]
+            for p in pts:
+                f.write(f'<circle cx="{p[0]}" cy="{p[1]}" r="3" fill="{color}" stroke="{color}" stroke-width="2"/>\n')
+    
+    # --- Compute Layers ---
+    def compute_hull_layers(self):
+        """Compute convex hull layers (iterative removal) and return as a list of layers."""
+        layers = []
+        pts = self.points[:]
+        while len(pts) >= 3:
+            hull = Geometry.graham_scan(pts)
+            if len(hull) < 3:
+                break
+            layers.append(hull)
+            pts = [p for p in pts if p not in hull]
+        if len(pts) == 2:
+            layers.append(pts)
+        return layers
+    
+    def compute_circle_layers(self):
+        """Compute iterative minimum enclosing circles and return circles and their assigned points.
+        
+        Returns:
+            tuple: (circles, circle_point_map) where circles is a list of (cx, cy, r) and
+                   circle_point_map is a list of lists, each containing the points enclosed by that circle.
+        """
+        circles = []
+        circle_point_map = []
+        pts_remaining = self.points[:]
+        while pts_remaining:
+            circle = Geometry.MINIDISC(pts_remaining)
+            if circle is None:
+                break
+            assigned = [p for p in pts_remaining if Geometry.is_point_on_disc(p, circle)]
+            circles.append(circle)
+            circle_point_map.append(assigned)
+            pts_remaining = [p for p in pts_remaining if p not in assigned]
+        return circles, circle_point_map
+
+    # --- SVG Export Functions ---
+    def save_points_svg(self):
+        """Save an SVG file with the input points drawn in black."""
+        with open("points.svg", "w") as f:
+            self._write_svg_header(f)
+            self._write_points(f, self.points, default_color="black")
+            self._write_svg_footer(f)
+    
+    def save_hull_svg(self):
+        """Save an SVG file with convex hulls (alternating indigo and olive) 
+        overlaid with points colored according to the hull they belong to."""
+        hull_layers = self.compute_hull_layers()
+        hull_colors = ["red", "blue"]
+        point_color_map = {}
+        for i, hull in enumerate(hull_layers):
+            color = hull_colors[i % len(hull_colors)]
+            for p in hull:
+                point_color_map[p] = color
+        with open("hull.svg", "w") as f:
+            self._write_svg_header(f)
+            self._write_hulls(f, hull_layers, hull_colors)
+            self._write_points(f, self.points, point_color_map=point_color_map, default_color="black")
+            self._write_svg_footer(f)
+    
+    def save_cir_svg(self):
+        """Save an SVG file with iterative minimum enclosing circles (alternating crimson and darkcyan)
+        overlaid with points colored according to the circle they are a part of."""
+        circles, circle_point_map = self.compute_circle_layers()
+        circle_colors = ["#AAFF00", "orange"]
+        with open("cir.svg", "w") as f:
+            self._write_svg_header(f)
+            self._write_circles(f, circles, circle_point_map, circle_colors)
+            self._write_svg_footer(f)
+    
+    def save_all_svg(self):
+        """Save an SVG file that overlays hulls, then circles, then points."""
+        hull_layers = self.compute_hull_layers()
+        hull_colors = ["red", "blue"]
+        circles, circle_point_map = self.compute_circle_layers()
+        circle_colors = ["#AAFF00", "orange"]
+        # For points, if a point belongs to a hull, use that hull's color; otherwise, default black.
+        point_color_map = {}
+        for i, hull in enumerate(hull_layers):
+            color = hull_colors[i % len(hull_colors)]
+            for p in hull:
+                point_color_map[p] = color
+        # Also override points that are part of a circle with the circle color.
+        for i, pts in enumerate(circle_point_map):
+            color = circle_colors[i % len(circle_colors)]
+            for p in pts:
+                point_color_map[p] = color
+        with open("all.svg", "w") as f:
+            self._write_svg_header(f)
+            # Write hulls
+            self._write_hulls(f, hull_layers, hull_colors)
+            # Write circles
+            self._write_circles(f, circles, circle_point_map, circle_colors)
+            # Write points
+            self._write_points(f, self.points)
+            self._write_svg_footer(f)
+    
+    def save_svg(self):
+        """Save all four SVG files: points.svg, hull.svg, cir.svg, and all.svg."""
+        self.save_points_svg()
+        self.save_hull_svg()
+        self.save_cir_svg()
+        self.save_all_svg()
+        print("SVG files saved: points.svg, hull.svg, cir.svg, all.svg")
     
     # --- Dragging Functions ---
     def start_drag(self, event, idx):
@@ -292,7 +451,7 @@ class PointDragger:
         self.draw_points()
     
     def generate_random_points(self):
-        """Generate a random set of points within the canvas dimensions."""
+        """Generate a random set of points within the canvas with margins."""
         try:
             num_points = int(self.random_entry.get())
             if num_points <= 0:
@@ -302,8 +461,8 @@ class PointDragger:
         self.points = []
         self.colors = []
         for _ in range(num_points):
-            x = random.randint(0, self.canvas_width)
-            y = random.randint(0, self.canvas_height)
+            x = random.randint(int(self.canvas_width/4), int(3*self.canvas_width/4))
+            y = random.randint(int(self.canvas_height/4), int(3*self.canvas_height/4))
             self.points.append((x, y))
             self.colors.append("#{:06x}".format(random.randint(0, 0xFFFFFF)))
         self.draw_points()
@@ -337,34 +496,21 @@ class PointDragger:
             self.canvas.tag_bind(oval, "<B1-Motion>", lambda e, idx=idx: self.drag(e, idx))
     
     # --- Convex Hull Functions ---
-    def calculate_convex_hulls(self):
-        """Generate and draw convex hull layers using the Graham scan algorithm."""
-        pts = self.points[:]
-        while len(pts) > 2:
-            hull = Geometry.graham_scan(pts)
-            if len(hull) < 3:
-                break
-            polygon_color = "#{:06x}".format(random.randint(0, 0xFFFFFF))
-            self.canvas.create_polygon(hull, outline=polygon_color, fill="", width=2)
-            pts = [p for p in pts if p not in hull]
-        if len(pts) == 2:
-            p1, p2 = pts
-            color = "#{:06x}".format(random.randint(0, 0xFFFFFF))
-            self.canvas.create_line(p1[0], p1[1], p2[0], p2[1], fill=color, width=2)
+    def draw_convex_hulls(self):
+        """Draw convex hulls for the set of points."""
+        hull_layers = self.compute_hull_layers()
+        for i, hull in enumerate(hull_layers):
+            color = f"#{random.randint(0, 0xFFFFFF):06x}"
+            pts_str = " ".join(f"{p[0]},{p[1]}" for p in hull)
+            self.canvas.create_polygon(hull, outline=color, fill="", width=2)
     
     # --- Minimum Enclosing Circle Functions ---
-    def generate_enclosing_circles(self):
-        """Iteratively compute and draw minimum enclosing circles for remaining points."""
-        pts_remaining = self.points[:]
-        while pts_remaining:
-            circle = Geometry.MINIDISC(pts_remaining)
-            if circle is None:
-                break
-            cx, cy, r = circle
-            circle_color = "#{:06x}".format(random.randint(0, 0xFFFFFF))
-            self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r, outline=circle_color, width=2)
-            # Remove points that are on or inside the circle.
-            pts_remaining = [p for p in pts_remaining if not Geometry.is_point_on_disc(p, circle)]
+    def draw_enclosing_circles(self):
+        """Draw minimum enclosing circles for all the points."""
+        circles, _ = self.compute_circle_layers()
+        for cx, cy, r in circles:
+            color = f"#{random.randint(0, 0xFFFFFF):06x}"
+            self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r, outline=color, fill="", width=2)
 
 if __name__ == "__main__":
     root = tk.Tk()
