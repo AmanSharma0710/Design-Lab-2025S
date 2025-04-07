@@ -178,7 +178,7 @@ class Geometry:
 class PointDragger:
     """GUI application to visualize point dragging, convex hulls, and minimum enclosing circles.
     
-    Also provides functionality to save the current output as SVG files.
+    Also provides functionality to save the current output as SVG files and a text file summary.
     """
     def __init__(self, root, width=600, height=800):
         self.root = root
@@ -190,17 +190,25 @@ class PointDragger:
         self.controls_frame = tk.Frame(root)
         self.controls_frame.pack(side=tk.TOP, fill=tk.X, pady=5)
         
-        # File and random points controls
+        # Random points controls (Uniform, Gaussian, Exponential)
+        self.random_frame = tk.Frame(self.controls_frame)
+        self.random_frame.pack(fill=tk.X, pady=2)
+        self.random_label = tk.Label(self.random_frame, text="Number of Points:")
+        self.random_label.pack(side=tk.LEFT, padx=5)
+        self.random_entry = tk.Entry(self.random_frame, width=5)
+        self.random_entry.pack(side=tk.LEFT)
+        self.uniform_button = tk.Button(self.random_frame, text="Generate Uniform Points", command=self.generate_uniform_points)
+        self.uniform_button.pack(side=tk.LEFT, padx=5)
+        self.gauss_button = tk.Button(self.random_frame, text="Generate Gaussian Points", command=self.generate_gaussian_points)
+        self.gauss_button.pack(side=tk.LEFT, padx=5)
+        self.exp_button = tk.Button(self.random_frame, text="Generate Exponential Points", command=self.generate_exponential_points)
+        self.exp_button.pack(side=tk.LEFT, padx=5)
+        
+        # Load points button
         self.file_frame = tk.Frame(self.controls_frame)
         self.file_frame.pack(fill=tk.X, pady=2)
         self.load_button = tk.Button(self.file_frame, text="Load Points from File", command=self.load_points)
         self.load_button.pack(side=tk.LEFT, padx=5)
-        self.random_label = tk.Label(self.file_frame, text="Number of Points:")
-        self.random_label.pack(side=tk.LEFT, padx=5)
-        self.random_entry = tk.Entry(self.file_frame, width=5)
-        self.random_entry.pack(side=tk.LEFT)
-        self.random_button = tk.Button(self.file_frame, text="Generate Random Points", command=self.generate_random_points)
-        self.random_button.pack(side=tk.LEFT, padx=5)
         
         # Canvas size controls
         self.size_frame = tk.Frame(self.controls_frame)
@@ -223,12 +231,14 @@ class PointDragger:
         self.canvas.pack()
         
         # --- Additional Function Buttons ---
-        self.hull_button = tk.Button(root, text="Generate Convex Hulls", command=self.draw_convex_hulls)
-        self.hull_button.pack(pady=5)
-        self.circle_button = tk.Button(root, text="Generate Enclosing Circles", command=self.draw_enclosing_circles)
-        self.circle_button.pack(pady=5)
-        self.save_button = tk.Button(root, text="Save SVG Files", command=self.save_svg)
-        self.save_button.pack(pady=5)
+        self.output_frame = tk.Frame(root)
+        self.output_frame.pack(fill=tk.X, pady=5)
+        self.hull_button = tk.Button(self.output_frame, text="Generate Convex Hulls", command=self.draw_convex_hulls)
+        self.hull_button.pack(side=tk.LEFT, padx=5)
+        self.circle_button = tk.Button(self.output_frame, text="Generate Enclosing Circles", command=self.draw_enclosing_circles)
+        self.circle_button.pack(side=tk.LEFT, padx=5)
+        self.save_button = tk.Button(self.output_frame, text="Save SVG Files & Summary", command=self.save_svg)
+        self.save_button.pack(side=tk.LEFT, padx=5)
         
         # --- Data ---
         self.points = []     # List of (x, y) tuples
@@ -238,6 +248,110 @@ class PointDragger:
         
         self.canvas.bind("<ButtonRelease-1>", self.end_drag)
     
+    # --- Point Generation with Minimum Distance Rejection ---
+    def _min_distance(self, num_points):
+        """Calculate the minimum allowed distance between points.
+        
+        Uses the canvas size and number of points.
+        """
+        return min(self.canvas_width, self.canvas_height) / (num_points)
+
+    def generate_uniform_points(self):
+        """Generate a random set of points using uniform randomness with rejection to avoid close points."""
+        try:
+            num_points = int(self.random_entry.get())
+            if num_points <= 0:
+                return
+        except ValueError:
+            return
+        pts = []
+        cols = []
+        dmin = self._min_distance(num_points)
+        max_tries = num_points * 1000
+        tries = 0
+        while len(pts) < num_points and tries < max_tries:
+            x = random.randint(int(self.canvas_width/4), int(3*self.canvas_width/4))
+            y = random.randint(int(self.canvas_height/4), int(3*self.canvas_height/4))
+            candidate = (x, y)
+            if all(math.dist(candidate, p) >= dmin for p in pts):
+                pts.append(candidate)
+                cols.append("#{:06x}".format(random.randint(0, 0xFFFFFF)))
+            tries += 1
+        self.points = pts
+        self.colors = cols
+        self.draw_points()
+
+    def generate_gaussian_points(self):
+        """Generate a set of points using Gaussian randomness centered at the canvas center."""
+        try:
+            num_points = int(self.random_entry.get())
+            if num_points <= 0:
+                return
+        except ValueError:
+            return
+        pts = []
+        cols = []
+        # Set sigma based on canvas dimensions
+        sigma_x = self.canvas_width / 8
+        sigma_y = self.canvas_height / 8
+        dmin = self._min_distance(num_points)
+        max_tries = num_points * 1000
+        tries = 0
+        while len(pts) < num_points and tries < max_tries:
+            x = int(random.gauss(self.canvas_width/2, sigma_x))
+            y = int(random.gauss(self.canvas_height/2, sigma_y))
+            # Ensure point is within margin of the canvas
+            if not (self.canvas_width/4 <= x <= 3*self.canvas_width/4 and self.canvas_height/4 <= y <= 3*self.canvas_height/4):
+                tries += 1
+                continue
+            candidate = (x, y)
+            if all(math.dist(candidate, p) >= dmin for p in pts):
+                pts.append(candidate)
+                cols.append("#{:06x}".format(random.randint(0, 0xFFFFFF)))
+            tries += 1
+        self.points = pts
+        self.colors = cols
+        self.draw_points()
+
+    def generate_exponential_points(self):
+        """Generate a set of points using exponential randomness centered at the canvas center.
+        
+        The exponential distribution is shifted to be centered.
+        """
+        try:
+            num_points = int(self.random_entry.get())
+            if num_points <= 0:
+                return
+        except ValueError:
+            return
+        pts = []
+        cols = []
+        scale = self.canvas_width / 8
+        dmin = self._min_distance(num_points)
+        max_tries = num_points * 1000
+        tries = 0
+        while len(pts) < num_points and tries < max_tries:
+            # Generate exponential value.
+            exp_x = random.expovariate(1/scale)
+            exp_y = random.expovariate(1/scale)
+            # Assign random sign to x and y
+            exp_x = exp_x if random.random() < 0.5 else -exp_x
+            exp_y = exp_y if random.random() < 0.5 else -exp_y
+            x = int(self.canvas_width/2 + exp_x)
+            y = int(self.canvas_height/2 + exp_y)
+            # Check bounds
+            if not (self.canvas_width/4 <= x <= 3*self.canvas_width/4 and self.canvas_height/4 <= y <= 3*self.canvas_height/4):
+                tries += 1
+                continue
+            candidate = (x, y)
+            if all(math.dist(candidate, p) >= dmin for p in pts):
+                pts.append(candidate)
+                cols.append("#{:06x}".format(random.randint(0, 0xFFFFFF)))
+            tries += 1
+        self.points = pts
+        self.colors = cols
+        self.draw_points()
+
     # --- Helper Functions for SVG Writing ---
     def _write_svg_header(self, f):
         f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
@@ -325,6 +439,27 @@ class PointDragger:
             pts_remaining = [p for p in pts_remaining if p not in assigned]
         return circles, circle_point_map
 
+    def save_out_txt(self):
+        """Save a text file 'out.txt' with hull layers and circle layers.
+        
+        The file will list:
+          - #hull layers: Each hull layer and the points in that layer (outermost to innermost)
+          - #circles: Each circle and the points on its boundary (biggest to smallest)
+        """
+        hull_layers = self.compute_hull_layers()
+        circles, _ = self.compute_circle_layers()
+        with open("out.txt", "w") as f:
+            f.write("#hull layers\n")
+            for i, layer in enumerate(hull_layers, start=1):
+                f.write(f"Layer {i} ({len(layer)} points): " + " ".join(f"({p[0]},{p[1]})" for p in layer) + "\n")
+            f.write("\n#circles\n")
+            for i, circle in enumerate(circles, start=1):
+                cx, cy, r = circle
+                f.write(f"Circle {i} (center=({int(cx)},{int(cy)}), r={int(r)}):\n")
+                # List points on the circle boundary
+                pts = [p for p in self.points if Geometry.is_point_on_disc(p, circle)]
+                f.write(" " + " ".join(f"({p[0]},{p[1]})" for p in pts) + "\n")
+    
     # --- SVG Export Functions ---
     def save_points_svg(self):
         """Save an SVG file with the input points drawn in black."""
@@ -334,7 +469,7 @@ class PointDragger:
             self._write_svg_footer(f)
     
     def save_hull_svg(self):
-        """Save an SVG file with convex hulls (alternating indigo and olive) 
+        """Save an SVG file with convex hulls (alternating red and blue) 
         overlaid with points colored according to the hull they belong to."""
         hull_layers = self.compute_hull_layers()
         hull_colors = ["red", "blue"]
@@ -350,7 +485,7 @@ class PointDragger:
             self._write_svg_footer(f)
     
     def save_cir_svg(self):
-        """Save an SVG file with iterative minimum enclosing circles (alternating crimson and darkcyan)
+        """Save an SVG file with iterative minimum enclosing circles (alternating #AAFF00 and orange)
         overlaid with points colored according to the circle they are a part of."""
         circles, circle_point_map = self.compute_circle_layers()
         circle_colors = ["#AAFF00", "orange"]
@@ -365,34 +500,30 @@ class PointDragger:
         hull_colors = ["red", "blue"]
         circles, circle_point_map = self.compute_circle_layers()
         circle_colors = ["#AAFF00", "orange"]
-        # For points, if a point belongs to a hull, use that hull's color; otherwise, default black.
         point_color_map = {}
         for i, hull in enumerate(hull_layers):
             color = hull_colors[i % len(hull_colors)]
             for p in hull:
                 point_color_map[p] = color
-        # Also override points that are part of a circle with the circle color.
         for i, pts in enumerate(circle_point_map):
             color = circle_colors[i % len(circle_colors)]
             for p in pts:
                 point_color_map[p] = color
         with open("all.svg", "w") as f:
             self._write_svg_header(f)
-            # Write hulls
             self._write_hulls(f, hull_layers, hull_colors)
-            # Write circles
             self._write_circles(f, circles, circle_point_map, circle_colors)
-            # Write points
-            self._write_points(f, self.points)
+            self._write_points(f, self.points, point_color_map=point_color_map, default_color="black")
             self._write_svg_footer(f)
     
     def save_svg(self):
-        """Save all four SVG files: points.svg, hull.svg, cir.svg, and all.svg."""
+        """Save all four SVG files: points.svg, hull.svg, cir.svg, and all.svg, and save a summary in out.txt."""
         self.save_points_svg()
         self.save_hull_svg()
         self.save_cir_svg()
         self.save_all_svg()
-        print("SVG files saved: points.svg, hull.svg, cir.svg, all.svg")
+        self.save_out_txt()
+        print("SVG files saved: points.svg, hull.svg, cir.svg, all.svg, and summary out.txt")
     
     # --- Dragging Functions ---
     def start_drag(self, event, idx):
@@ -451,21 +582,8 @@ class PointDragger:
         self.draw_points()
     
     def generate_random_points(self):
-        """Generate a random set of points within the canvas with margins."""
-        try:
-            num_points = int(self.random_entry.get())
-            if num_points <= 0:
-                return
-        except ValueError:
-            return
-        self.points = []
-        self.colors = []
-        for _ in range(num_points):
-            x = random.randint(int(self.canvas_width/4), int(3*self.canvas_width/4))
-            y = random.randint(int(self.canvas_height/4), int(3*self.canvas_height/4))
-            self.points.append((x, y))
-            self.colors.append("#{:06x}".format(random.randint(0, 0xFFFFFF)))
-        self.draw_points()
+        """Alias for uniform generation."""
+        self.generate_uniform_points()
     
     def resize_canvas(self):
         """Resize the canvas and scale all points accordingly."""
@@ -501,7 +619,6 @@ class PointDragger:
         hull_layers = self.compute_hull_layers()
         for i, hull in enumerate(hull_layers):
             color = f"#{random.randint(0, 0xFFFFFF):06x}"
-            pts_str = " ".join(f"{p[0]},{p[1]}" for p in hull)
             self.canvas.create_polygon(hull, outline=color, fill="", width=2)
     
     # --- Minimum Enclosing Circle Functions ---
